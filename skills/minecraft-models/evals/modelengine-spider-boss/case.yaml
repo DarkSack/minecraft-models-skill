@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: modelengine-spider-boss
+expected_outcome: |
+  A Creature with eight leg bones (single-axis cubes), idle/walk/attack/death/web_shot animations, roughly 3 blocks wide via hitbox and/or scale, built with the modelengine target; the creature preview was inspected; the answer explains /meg reload and how to play web_shot with state{mid=...;s=web_shot}.

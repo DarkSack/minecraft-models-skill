@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: nexo-battleaxe-with-bedrock
+expected_outcome: |
+  A spec with a handheld Item (axe base, rune or energy material with glow) built with the nexo and geyser targets into ./build; previews were inspected; the answer explains where Nexo files and the Geyser mcpack/mapping go (Geyser-Velocity on the proxy, full restart) and notes the Java version needs of the rotations against 1.21.8.

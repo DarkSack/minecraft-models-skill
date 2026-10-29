@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: rpgroll-dragon-armor-and-table
+expected_outcome: |
+  An ArmorSet plus four Items with wears=(set, piece) and a furniture Item, built with the rpgroll target; RPGRoll-Items files carry item-model and equipment-model; the SackResourcePack module and Geyser-Spigot files exist; the answer covers /srp rebuild, Geyser restart and the furniture example.
