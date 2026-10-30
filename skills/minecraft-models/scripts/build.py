@@ -55,7 +55,7 @@ def load_spec(path):
 
 def check(p, targets):
     """Problems that would only show up in game. Returns (errors, warnings)."""
-    errors, warns = [], []
+    errors, warns, notes = [], [], []
     for kind, group in (('item', p.items), ('armor set', p.armors), ('creature', p.creatures)):
         ids = [m.id for m in group]
         for d in sorted({i for i in ids if ids.count(i) > 1}):
@@ -64,13 +64,15 @@ def check(p, targets):
     for it in p.items:
         if it.wears and it.wears[0] not in sets:
             errors.append('%s wears armor set %r, which is not in MODELS' % (it.id, it.wears[0]))
-        warns += ['%s: %s' % (it.id, w) for w in it.warnings]
+        warns += ['%s: %s' % (it.id, w) for w in it.warnings if not w.startswith('NOTE ')]
+        notes += ['%s: %s' % (it.id, w[5:]) for w in it.warnings if w.startswith('NOTE ')]
     for c in p.creatures:
-        warns += ['%s: %s' % (c.id, w) for w in c.warnings]
+        warns += ['%s: %s' % (c.id, w) for w in c.warnings if not w.startswith('NOTE ')]
+        notes += ['%s: %s' % (c.id, w[5:]) for w in c.warnings if w.startswith('NOTE ')]
         for bone, ext in sorted(c.bone_extents().items()):
-            if ext > 48:
-                warns.append('%s: bone %s spans %.0f units; loaders build each bone as an item model '
-                             '(max 48 units across): split it into more bones' % (c.id, bone, ext))
+            if ext > c.max_bone:
+                warns.append('%s: bone %s spans %.0f units with one cube; loaders build each bone as an item '
+                             'model (max %d units across): use smaller cubes' % (c.id, bone, ext, c.max_bone))
         for t in targets:
             missing = [a for a in AUTO_ANIMS.get(t, ())[:2] if a not in c.anims]
             if missing:
@@ -79,7 +81,7 @@ def check(p, targets):
         warns.append('creatures only get previews and .bbmodel: add a target (fmm, modelengine, bettermodel, rpgroll)')
     if (p.items or p.armors) and not any(t in ITEM_TARGETS for t in targets):
         warns.append('items only get previews and .bbmodel: add a target (vanilla, geyser, rpgroll, ...)')
-    return errors, warns
+    return errors, warns, notes
 
 
 def previews(p, out):
@@ -88,10 +90,17 @@ def previews(p, out):
         write(os.path.join(out, 'items.png'), png_bytes(sheet([render(it, 64) for it in p.items], cols=8)))
         write(os.path.join(out, 'items_3d.png'), png_bytes(sheet([three_quarter(it, 96) for it in p.items], cols=6)))
         files += ['items.png (inventory icons, also the Bedrock icons)', 'items_3d.png (three-quarter view)']
+    from mcmodel.geom import matmul, rot
     for a in p.armors:
         write(os.path.join(out, 'armor_%s.png' % a.id.replace('/', '_')), png_bytes(a.preview()))
         files.append('armor_%s.png (worn layers 1 and 2)' % a.id)
-    from mcmodel.geom import matmul, rot
+        if a.extras:
+            m, win = centered(a.worn_model())
+            views = [render(m, 160, view=matmul(rot(x=-15), rot(y=y)), window=win, use_gui=False)
+                     for y in (145, 215, 90, 0)]
+            write(os.path.join(out, 'armor_%s_3d.png' % a.id.replace('/', '_')), png_bytes(sheet(views, cols=4)))
+            files.append('armor_%s_3d.png (Bedrock 3D pieces on a stand-in player: front 3/4 both sides, '
+                         'side, back)' % a.id)
     for c in p.creatures:
         frames = []
         for name in [None] + list(c.anims):
@@ -127,7 +136,7 @@ def main(argv=None):
     lo, hi = (int(x) for x in a.formats.split('-'))
     p = Project(ns, getattr(mod, 'TITLE', ns), a.author or getattr(mod, 'AUTHOR', ''), models, (lo, hi))
 
-    errors, warns = check(p, targets)
+    errors, warns, notes = check(p, targets)
     for e in errors:
         print('ERROR  ' + e)
     if errors:
@@ -139,17 +148,19 @@ def main(argv=None):
     for it in p.items:
         need = it.min_java()
         newest = max(newest, need)
-        print('  item     %-28s %-9s on %-18s %3dpx%s  Java %s+' % (
+        print('  item     %-28s %-10s on %-18s %3dpx%s  Java %s+' % (
             it.id, it.style, it.base, it.side, ' x%d frames' % len(it.frames) if it.animated else '',
             '.'.join(map(str, need))))
     for ar in p.armors:
         print('  armor    %s' % ar.id)
     for c in p.creatures:
-        print('  creature %-28s %d bones, %d cubes, %dpx, hitbox %sx%s, anims: %s' % (
+        print('  creature %-28s %d bones, %d cubes, %dpx, hitbox %gx%g, anims: %s' % (
             c.id, len(c.all_bones), len(c.cubes), c.model.side, c.hitbox[0], c.hitbox[1], ', '.join(c.anims) or '-'))
     if newest > (1, 21, 4):
         print('NOTE   some item rotations need Java %s+ (see Java column): older clients show those models '
               'broken. Use only 22.5-degree steps on one axis to support 1.21.4.' % '.'.join(map(str, newest)))
+    for n in notes:
+        print('NOTE   ' + n)
     for w in warns:
         print('WARN   ' + w)
 

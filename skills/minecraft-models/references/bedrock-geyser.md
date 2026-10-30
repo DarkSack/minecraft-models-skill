@@ -22,6 +22,8 @@ animations/<ns>_<id>.animation.json              Java display transforms as anim
 attachables/<ns>_<id>.json                       ties identifier, geometry, texture and animations
 render_controllers/<ns>.render_controllers.json  only for worn armor (switches to armor geometry)
 textures/<ns>/armor_<set>_<1|2>.png              worn armor layers
+models/entity/<ns>_<id>_3d.geo.json              optional worn armor extras
+textures/<ns>/<ns>_<id>_3d.png                   atlas for those extras
 ```
 
 Install: copy `packs/` and `custom_mappings/` into `plugins/Geyser-<platform>/` on the server that
@@ -74,6 +76,14 @@ The attachable of each armor piece carries two geometries: the 3D item model (`d
 layer texture. A render controller switches on `v.worn = c.item_slot == '<head|torso|legs|feet>'`.
 The base item must be wearable (e.g. `iron_chestplate`) so Bedrock equips it.
 
+With `ArmorSet(detail=2)`, worn layers are 128x64. `extras` adds a third geometry/texture pair
+(`worn3d`) and a second render controller (`controller.render.<id>_3d`) visible only when `v.worn`.
+Extras attach to player bones `head`, `body`, `rightArm`, `leftArm`, `rightLeg`, `leftLeg` via
+child bones ending `_3d`. The layer controller keeps drawing underneath; the inventory/held item
+uses its ordinary model. These extras are generated and previewed but **not yet verified in a
+Bedrock client**, especially arm/body binding during movement. Java equipment supports the
+layers only; use a separate `helmet`-style item for a 3D helmet on both editions.
+
 ## Furniture (ItemDisplay)
 
 Geyser shows Java ItemDisplay entities only with the **GeyserDisplayEntity** extension
@@ -81,6 +91,12 @@ Geyser shows Java ItemDisplay entities only with the **GeyserDisplayEntity** ext
 `geyser_z` bone and adds a `placed` animation that applies the display offset (measured in the
 client: x and y times 0.6, z times -2.6, plus one block of height). Without the extension,
 Bedrock players see nothing.
+
+`projectile` uses the same binding and placed animation, so a plasma bolt also needs
+GeyserDisplayEntity. Build the nose along +z; RPGRoll rotates the ItemDisplay into its flight
+direction. Projectile pitch (especially upward/downward shots) still needs an in-game Geyser check.
+Large weapons export `hand_scale` in hand animations, with larger visible bounds; verify the
+grip and first/third-person size on the client.
 
 ## Traps
 
@@ -100,5 +116,8 @@ Bedrock players see nothing.
 
 - The pack downloads on join (watch for "Downloading resource packs").
 - Inventory icon, held in first and third person, dropped, in an item frame, worn (armor/helmet).
+- Worn extras follow arms/body/legs while walking and attacking, and disappear when unequipped.
+- `hand_scale` keeps the grip in the hand on both editions; plasma projectile pitch follows aim.
+- Hold right click on the beam rifle: verify Geyser repeats pulses and ammo use as Java does.
 - If an item shows as vanilla: mapping key or `model` mismatch, or Geyser not restarted.
 - If it is invisible or stretched: geometry/texture mismatch; rebuild and restart Geyser.

@@ -248,6 +248,83 @@ def move_parts(parts, d):
     return parts
 
 
+def scale_parts(parts, k, center):
+    """Resize parts by k around `center` (rotations kept)."""
+    for p in parts:
+        p.frm, p.to, p.origin = ([c + k * (v - c) for v, c in zip(vec, center)] for vec in (p.frm, p.to, p.origin))
+    return parts
+
+
+# ---------------------------------------------------------------- detail helpers (volume)
+
+def bevel(name, center, size, mat, edge=0.5, r=None, light=None):
+    """A box with chamfered edges: three overlapping boxes, each inset by `edge` on two axes.
+    Reads as machined metal or cut stone instead of a flat brick."""
+    out = []
+    for i in range(3):
+        s = [v if j == i else max(0.1, v - 2 * edge) for j, v in enumerate(size)]
+        out.append(box(name, center, s, mat, r=r, light=light))
+    return out
+
+
+def tube(name, center, length, radius, mat, axis='x', light=None, round=False):
+    """A pipe, barrel, handle or cell along `axis`. Two unrotated boxes make a stepped octagon;
+    `round=True` uses overlapping squares turned 45 degrees (may need newer Java on handhelds)."""
+    i = 'xyz'.index(axis)
+    s = 2 * radius * (math.cos(math.pi / 8) if round else 1)
+    size = [s, s, s]
+    size[i] = length
+    if not round:
+        cross = [j for j in range(3) if j != i]
+        inner = size[:]
+        c = 0.293 * s
+        size[cross[0]] -= 2 * c
+        inner[cross[1]] -= 2 * c
+        return [box(name, center, size, mat, light=light), box(name, center, inner, mat, light=light)]
+    turn = [0, 0, 0]
+    turn[i] = 45
+    inner = [v * 0.999 for v in size]
+    inner[i] = length - 0.04                    # ends a hair inside: no flicker where the two caps overlap
+    return [box(name, center, size, mat, light=light), box(name, center, inner, mat, r=tuple(turn), light=light)]
+
+
+def rivets(name, p0, p1, n, mat, size=0.6, light=None):
+    """`n` small studs evenly spaced from p0 to p1 (3D points): bolts on a plate, studs on a strap."""
+    return [box(name, [a + (b - a) * (k / float(max(1, n - 1))) for a, b in zip(p0, p1)], [size] * 3, mat,
+                light=light) for k in range(n)]
+
+
+def blade(name, base, tip, width, depth, mat, edge=None, segments=4, taper=0.55, z=8.0, light=None):
+    """
+    A sharp blade in the xy plane from `base` to `tip`: a thick spine that narrows to `taper` of its
+    width, a point, and (with `edge`, a material name) thin bright edges on both sides.
+    """
+    dx, dy = tip[0] - base[0], tip[1] - base[1]
+    L = math.hypot(dx, dy)
+    ux, uy = dx / L, dy / L
+    nx, ny = -uy, ux
+    end = width * taper
+    body = L - end * 0.5                       # the point (half a diagonal of the last width) closes it
+    e = min(0.6, width * 0.18) if edge else 0.0
+    out = []
+    for k in range(segments):
+        t0, t1 = k / float(segments), (k + 1) / float(segments)
+        w = width + (end - width) * (t0 + t1) / 2.0
+        a = (base[0] + ux * body * t0, base[1] + uy * body * t0)
+        b = (base[0] + ux * body * t1, base[1] + uy * body * t1)
+        out.append(bar(name, a, b, w - 2 * e, depth, mat, z=z, light=light, overlap=0.2))
+        if edge:
+            for side in (1, -1):
+                o = (w / 2.0 - e / 2.0) * side
+                out.append(bar(name + '_edge', (a[0] + nx * o, a[1] + ny * o), (b[0] + nx * o, b[1] + ny * o),
+                               e, depth * 0.45, edge, z=z, light=light, overlap=0.2))
+    c = (base[0] + ux * body, base[1] + uy * body)
+    angle = math.degrees(math.atan2(dy, dx)) - 90.0
+    out.append(box(name + '_point', [c[0], c[1], z], [end / math.sqrt(2)] * 2 + [depth * (0.45 if edge else 0.8)],
+                   edge or mat, r=(0, 0, angle + 45), light=light))
+    return out
+
+
 # ---------------------------------------------------------------- single-axis helpers (creatures)
 
 def cube(name, center, size, mat, axis=None, angle=0.0, origin=None):

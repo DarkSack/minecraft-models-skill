@@ -17,7 +17,7 @@ import random
 import re
 import uuid
 
-from .geom import FACES, angles, apply, display_rot, matmul, rot
+from .geom import FACES, angles, apply, display_rot, matmul, rot, scale_parts
 from .paint import CLEAR, PAINTERS, is_animated, mix, png_bytes, read_png
 
 DENSITY = 4          # texture pixels per model unit (4 = the detail of a 64x64 item)
@@ -182,10 +182,12 @@ GUN_VIEWS = {'thirdperson_righthand': [0, 90, 90], 'thirdperson_lefthand': [0, -
 HANDS = ('thirdperson_righthand', 'thirdperson_lefthand', 'firstperson_righthand', 'firstperson_lefthand')
 GUN_LENGTH = 20.0      # a longer gun is scaled down in the hand
 BLADE_LENGTH = 24.0    # diagonal: a vanilla sword is 22.6 from tip to pommel
+MAX_SCALE = 4.0        # Java clamps display scale to 4 and translation to +-80
 
-STYLES = ('handheld', 'gun', 'rod', 'flat', 'object', 'helmet', 'furniture')
+STYLES = ('handheld', 'gun', 'rod', 'flat', 'object', 'helmet', 'furniture', 'projectile')
 DEFAULT_BASE = {'handheld': 'iron_sword', 'gun': 'iron_horse_armor', 'rod': 'fishing_rod', 'flat': 'paper',
-                'object': 'paper', 'helmet': 'iron_helmet', 'furniture': 'paper'}
+                'object': 'paper', 'helmet': 'iron_helmet', 'furniture': 'paper', 'projectile': 'paper'}
+DISPLAYED = ('furniture', 'projectile')   # shown by an ItemDisplay (Geyser: GeyserDisplayEntity)
 # Armor piece -> (Bedrock c.item_slot, Java layer index: humanoid = 1, humanoid_leggings = 2)
 ARMOR_PIECES = {'helmet': ('head', 1), 'chestplate': ('torso', 1), 'leggings': ('legs', 2), 'boots': ('feet', 1)}
 
@@ -201,12 +203,19 @@ class Item(Model):
       object    3D trinket shown three-quarter in the inventory (lantern, potion, totem)
       helmet    worn on the head, front facing -z, center (8, 8, 8) at the head center
       furniture placed with an ItemDisplay (transform NONE): drawn as built, block 0..16
+      projectile what a gun fires (RPGRoll SHOOT `model`): an ItemDisplay that points its +z
+                where it flies; build it nose to +z around (8, 8, 8)
     base:  vanilla item it rides on (behavior + fallback look), e.g. 'diamond_sword'.
     wears: (armor_set_id, 'helmet'|'chestplate'|'leggings'|'boots') for an armor piece.
+    hand_scale: size in the hand vs. a vanilla item (2 = a greatsword twice a sword's length).
+           handheld and gun models bigger than Java's -16..32 box are shrunk to fit and enlarged
+           back in the hand, so build them at the size you picture.
+    shot:  RPGRoll SHOOT parameters fired on right click, e.g. {'amount': 2, 'sustain': 6,
+           'ammo': 'laser_cell'}; 'model' and 'ammo' may name items of this spec.
     """
 
     def __init__(self, ident, parts, mats, style='handheld', name=None, base=None, grip=(4, 4), wears=None,
-                 density=DENSITY, seed=None):
+                 density=DENSITY, seed=None, hand_scale=1.0, shot=None):
         _check_id(ident, 'item')
         if style not in STYLES:
             raise ValueError('%s: style %r not in %s' % (ident, style, ', '.join(STYLES)))
@@ -220,16 +229,40 @@ class Item(Model):
                 raise ValueError('%s: wears piece must be one of %s' % (ident, ', '.join(ARMOR_PIECES)))
             base = base or 'iron_' + wears[1]
         self.base = (base or DEFAULT_BASE[style]).replace('minecraft:', '')
+        self.hand_scale = float(hand_scale)
+        self.shot = dict(shot) if shot else None
         if style in ('handheld', 'rod'):
             for p in self.parts:
                 p.rotate(rot(z=-45), [8, 8, 8])
         for p in self.parts:
             p.within_45()
+        if style in ('handheld', 'gun'):
+            self._fit_range()
         self._check_range()
         self._prepare_display()
         self.finish(seed)
 
     # ------------------------------------------------------------ checks
+
+    def _fit_range(self):
+        """Shrink a held weapon into -16..32; its hand size comes from its length, so nothing changes in game."""
+        # Java limits the unrotated from/to as well as the visible geometry we want to fit.
+        # A long blade tilted 45 degrees has smaller visible bounds than its source box.
+        points = [v for p in self.parts for v in p.vertices() + [p.frm, p.to]]
+        lo = [min(v[i] for v in points) for i in range(3)]
+        hi = [max(v[i] for v in points) for i in range(3)]
+        span = max(h - l for l, h in zip(lo, hi))
+        if min(lo) >= -16 and max(hi) <= 32:
+            return
+        k = min(1.0, 47.5 / span)
+        c = [(l + h) / 2.0 for l, h in zip(lo, hi)]
+        scale_parts(self.parts, k, c)
+        for p in self.parts:
+            p.move([8 - v for v in c])
+        self.grip = [8 + k * (g - c[i]) for i, g in enumerate(self.grip[:2])]
+        self.density = self.density_asked = self.density / k
+        self.warnings.append("NOTE model spans %.0f units: %s into Java's -16..32 box (same size in the hand)"
+                             % (span, 'moved' if k == 1.0 else 'shrunk x%.2f' % k))
 
     def _check_range(self):
         """Java item models only accept from/to between -16 and 32."""
@@ -274,7 +307,7 @@ class Item(Model):
             # The pommel is the bottom-left end; the hand holds it 2.8 units in, like a vanilla sword.
             diag = [(v[0] + v[1] - 16) / math.sqrt(2) for p in self.parts for v in p.vertices()]
             d = (-min(diag) - 2.83) / math.sqrt(2)
-            self._shrink_in_hand(BLADE_LENGTH / (max(diag) - min(diag)), [-d, -d, 0])
+            self._scale_in_hand(min(1.0, BLADE_LENGTH / (max(diag) - min(diag))) * self.hand_scale, [-d, -d, 0])
         elif st == 'gun':
             self.display = self._fit(HANDHELD)
             g = [self.grip[0] - 8, self.grip[1] - 8, 0]
@@ -286,7 +319,7 @@ class Item(Model):
                 self.display[view] = {'rotation': r, 'scale': v['scale'],
                                       'translation': [round(a + b - c, 3) for a, b, c in zip(v['translation'], sword, gun)]}
             lo, hi = self.bounds()
-            self._shrink_in_hand(GUN_LENGTH / (hi[0] - lo[0]), g)
+            self._scale_in_hand(min(1.0, GUN_LENGTH / (hi[0] - lo[0])) * self.hand_scale, g)
         elif st == 'rod':
             self.display = self._fit(ROD)
         elif st == 'flat':
@@ -304,7 +337,7 @@ class Item(Model):
                                       'scale': [round(0.4 * s / 0.625, 3)] * 3}
             self.display['fixed'] = {'rotation': [0, 180, 0], 'translation': [0, 0, 0],
                                      'scale': [round(s / 0.625 * 0.6, 3)] * 3}
-        else:  # furniture: no 'fixed', the ItemDisplay draws the model as built
+        else:  # furniture, projectile: no 'fixed', the ItemDisplay draws the model as built
             lo, hi = self.bounds()
             fit = min(1.0, 16.0 / max(h - l for l, h in zip(lo, hi)))
             c = [(l + h) / 2.0 - 8 for l, h in zip(lo, hi)]
@@ -321,18 +354,26 @@ class Item(Model):
                 'firstperson_righthand': {'rotation': [0, 45, 0], 'translation': [0, 0, 0], 'scale': [fs] * 3},
                 'firstperson_lefthand': {'rotation': [0, 225, 0], 'translation': [0, 0, 0], 'scale': [fs] * 3},
             }
+        if st not in ('handheld', 'gun'):
+            self._scale_in_hand(self.hand_scale, [0, 0, 0])
 
-    def _shrink_in_hand(self, k, hold):
-        """Scale the hand views by k (< 1 only) keeping `hold` (relative to the center) in the hand."""
-        if k >= 1:
+    def _scale_in_hand(self, k, hold):
+        """Scale the hand views by k keeping `hold` (relative to the center) in the hand. First person
+        grows half as much: a huge weapon at full size would cover the screen."""
+        if abs(k - 1) < 1e-9:
             return
         for view in HANDS:
             v = self.display[view]
             s = v['scale'][0]
+            kv = k if k < 1 or view.startswith('third') else 1 + (k - 1) * 0.5
+            if s * kv > MAX_SCALE:
+                kv = MAX_SCALE / s
+                self.warnings.append('%s: hand_scale capped (Java display scale max %g)' % (view, MAX_SCALE))
             before = apply(display_rot(v['rotation']), [c * s for c in hold])
-            after = apply(display_rot(v['rotation']), [c * s * k for c in hold])
-            v['translation'] = [round(t + a - b, 3) for t, a, b in zip(v['translation'], before, after)]
-            v['scale'] = [round(s * k, 3)] * 3
+            after = apply(display_rot(v['rotation']), [c * s * kv for c in hold])
+            v['translation'] = [round(max(-80, min(80, t + a - b)), 3)
+                                for t, a, b in zip(v['translation'], before, after)]
+            v['scale'] = [round(s * kv, 3)] * 3
 
     @property
     def flat_gui(self):
@@ -413,20 +454,7 @@ class Item(Model):
     # ------------------------------------------------------------ Bedrock (attachable for Geyser)
 
     def bedrock_cubes(self):
-        cubes = []
-        for i, p in enumerate(self.parts):
-            c = {'origin': _r4([-(p.to[0] - 8), p.frm[1], p.frm[2] - 8]), 'size': _r4(p.size())}
-            a = p.angles()
-            if any(a):
-                c['pivot'] = _r4([-(p.origin[0] - 8), p.origin[1], p.origin[2] - 8])
-                c['rotation'] = [-a[0] if a[0] else 0.0, -a[1] if a[1] else 0.0, a[2]]
-            c['uv'] = {}
-            for f in FACES:
-                if f not in p.hide:
-                    x, y, w, h = self.uv[(i, f)]
-                    c['uv'][f] = {'uv': [x, y], 'uv_size': [w, h]}
-            cubes.append(c)
-        return cubes
+        return [_bedrock_cube(self, i, 8) for i in range(len(self.parts))]
 
     def bedrock_geometry(self, ident):
         """
@@ -437,7 +465,10 @@ class Item(Model):
         binding = "c.item_slot == 'head' ? 'head' : q.item_slot_to_bone_name(c.item_slot)"
         desc = {'identifier': 'geometry.' + ident, 'texture_width': self.side, 'texture_height': self.side,
                 'visible_bounds_width': 4, 'visible_bounds_height': 4.5, 'visible_bounds_offset': [0, 0.75, 0]}
-        if self.style == 'furniture':
+        if self.hand_scale > 1:
+            desc.update(visible_bounds_width=round(4 * self.hand_scale, 2),
+                        visible_bounds_height=round(4.5 * self.hand_scale, 2))
+        if self.style in DISPLAYED:
             # On a GeyserDisplayEntity entity, bind to its geyser_z bone (carries the ItemDisplay
             # transform); it is told apart by a property only that entity has.
             binding = "q.has_property('geyser:t_x') ? 'geyser_z' : (%s)" % binding
@@ -473,7 +504,7 @@ class Item(Model):
                  base + '.fp_right': bones(d['firstperson_righthand'], fp),
                  base + '.fp_left': bones(d['firstperson_lefthand'], fp, mirror_x=False),
                  base + '.head': bones(d.get('head', {}), {'position': [0, 19.9, 0]}, k=0.625)}
-        if self.style == 'furniture':
+        if self.style in DISPLAYED:
             # GeyserDisplayEntity sends the offset x10 (a block is 16) with z flipped, and bound
             # to the bone the model sits one block low: measured in the client.
             anims[base + '.placed'] = {'geyser_custom': {'position': [
@@ -481,8 +512,9 @@ class Item(Model):
                 "-2.6 * q.property('geyser:t_z')"]}}
         return {'format_version': '1.8.0', 'animations': {k: {'loop': True, 'bones': v} for k, v in anims.items()}}
 
-    def bedrock_attachable(self, bedrock_id, ident, texture, worn=None):
-        """`worn` = (geometry piece, item_slot, layer texture path) for an armor piece."""
+    def bedrock_attachable(self, bedrock_id, ident, texture, worn=None, worn3d=None):
+        """`worn` = (geometry piece, item_slot, layer texture path) for an armor piece; `worn3d` = the
+        texture path of its 3D extras (geometry.<ident>_3d)."""
         base = 'animation.' + ident
         names = ('tp_right', 'tp_left', 'fp_right', 'fp_left', 'head')
         animations = {n: '%s.%s' % (base, n) for n in names}
@@ -493,7 +525,7 @@ class Item(Model):
                    {'head': 'v.head && !c.is_first_person'}]
         pre = ["v.main_hand = c.item_slot == 'main_hand';", "v.off_hand = c.item_slot == 'off_hand';",
                "v.head = c.item_slot == 'head';"]
-        if self.style == 'furniture':
+        if self.style in DISPLAYED:
             animations['placed'] = base + '.placed'
             pre.append("v.placed = q.has_property('geyser:t_x');")
             animate.append({'placed': 'v.placed'})
@@ -510,6 +542,11 @@ class Item(Model):
             desc['geometry']['worn'] = 'geometry.player.armor.' + piece
             pre.append("v.worn = c.item_slot == '%s';" % slot)
             desc['render_controllers'] = ['controller.render.%s_worn' % ident]
+            if worn3d:
+                desc['materials']['worn3d'] = 'entity_alphatest'
+                desc['textures']['worn3d'] = worn3d
+                desc['geometry']['worn3d'] = 'geometry.%s_3d' % ident
+                desc['render_controllers'].append('controller.render.%s_3d' % ident)
         return {'format_version': '1.10.0', 'minecraft:attachable': {'description': desc}}
 
     @staticmethod
@@ -519,6 +556,22 @@ class Item(Model):
             'geometry': 'v.worn ? Geometry.worn : Geometry.default',
             'materials': [{'*': 'v.worn ? Material.worn : Material.default'}],
             'textures': ['v.worn ? Texture.worn : Texture.default']}}
+
+
+def _bedrock_cube(model, i, c):
+    """Part i of `model` as a Bedrock cube: x mirrored around `c`, z moved by -c."""
+    p = model.parts[i]
+    cube = {'origin': _r4([-(p.to[0] - c), p.frm[1], p.frm[2] - c]), 'size': _r4(p.size())}
+    a = p.angles()
+    if any(a):
+        cube['pivot'] = _r4([-(p.origin[0] - c), p.origin[1], p.origin[2] - c])
+        cube['rotation'] = [-a[0] if a[0] else 0.0, -a[1] if a[1] else 0.0, a[2]]
+    cube['uv'] = {}
+    for f in FACES:
+        if f not in p.hide:
+            x, y, w, h = model.uv[(i, f)]
+            cube['uv'][f] = {'uv': [x, y], 'uv_size': [w, h]}
+    return cube
 
 
 # ================================================================= ArmorSet
@@ -532,28 +585,47 @@ def _cube_faces(u, v, w, h, d):
 _TONE = {'top': -3, 'front': 5, 'right': 4, 'left': 4, 'back': 3, 'bottom': 2}
 
 
-def _paint_face(px, face, rect, pal, rows=None, accent=None, open_front=False):
-    """One face of a worn layer: tone by orientation, dark border, plate lines, a rivet."""
-    x0, y0, w, h = rect
+def _paint_face(px, face, rect, pal, rows=None, accent=None, open_front=False, k=1):
+    """One face of a worn layer: tone by orientation, dark border, plate lines, a rivet. `rect` and
+    `rows` are on the 64x32 map; k = 2 paints the 128x64 version with a bevel inside the border."""
+    x0, y0, w, h = [v * k for v in rect]
+    if rows is not None:
+        rows = range(min(rows) * k, (max(rows) + 1) * k)
+    t = _TONE[face]
     for j in range(h):
         if rows is not None and j not in rows:
             continue
         for i in range(w):
-            if open_front and 1 <= j < h - 1 and 1 <= i < w - 1:
+            if open_front and k <= j < h - k and k <= i < w - k:
                 continue                                    # the face opening of a helmet
-            c = pal[_TONE[face]]
+            c = pal[t]
             edge = i in (0, w - 1) or j in (0, h - 1) or (rows is not None and j in (min(rows), max(rows)))
             if edge:
-                c = pal[max(1, _TONE[face] - 2)] if face != 'top' else pal[4]
-            elif face in ('front', 'back', 'right', 'left') and j % 4 == 3:
-                c = pal[max(1, _TONE[face] - 1)]
-            if face == 'front' and not edge and j == 1 and i == 1:
+                c = pal[max(1, t - 2)] if face != 'top' else pal[4]
+            elif k > 1 and (i == 1 or j == 1 or (rows is not None and j == min(rows) + 1)):
+                c = pal[min(len(pal) - 1, t + 1)]           # light bevel just inside the border
+            elif k > 1 and (i == w - 2 or j == h - 2):
+                c = pal[max(1, t - 1)]
+            elif face in ('front', 'back', 'right', 'left') and j % (4 * k) == 4 * k - 1:
+                c = pal[max(1, t - 1)]
+            if face == 'front' and not edge and k <= j < 2 * k and k <= i < 2 * k:
                 c = pal[-1]
             px[y0 + j][x0 + i] = c
-    if accent and face == 'front' and w >= 4 and not open_front:
-        rr = [r for r in range(1, h - 1) if rows is None or r in rows]
+    if accent and face == 'front' and w >= 4 * k and not open_front:
+        rr = [r for r in range(k, h - k) if rows is None or r in rows]
         if rr:
-            px[y0 + rr[len(rr) // 2]][x0 + w // 2] = accent[-2]
+            for dy in range(k):
+                for dx in range(k):
+                    px[y0 + rr[len(rr) // 2] + dy - k // 2][x0 + w // 2 + dx - k // 2] = accent[-2]
+
+
+# Worn 3D pieces hang from the player's bones (Bedrock names and pivots).
+EXTRA_BONES = {'head': ('head', [0, 24, 0]), 'body': ('body', [0, 24, 0]),
+               'right_arm': ('rightArm', [-5, 22, 0]), 'left_arm': ('leftArm', [5, 22, 0]),
+               'right_leg': ('rightLeg', [-1.9, 12, 0]), 'left_leg': ('leftLeg', [1.9, 12, 0])}
+# A stand-in player for the worn preview (Java space: faces -z, right side to +x).
+MANNEQUIN = [('head', (0, 28, 0), (8, 8, 8)), ('body', (0, 18, 0), (8, 12, 4)), ('arm', (6, 18, 0), (4, 12, 4)),
+             ('arm', (-6, 18, 0), (4, 12, 4)), ('leg', (2, 6, 0), (4, 12, 4)), ('leg', (-2, 6, 0), (4, 12, 4))]
 
 
 class ArmorSet:
@@ -561,12 +633,31 @@ class ArmorSet:
     The worn look of an armor: two 64x32 layers on the vanilla humanoid UV map.
     Layer 1 = helmet, chestplate (torso + arms), boots; layer 2 = leggings.
     `ramp` (8+ colors) paints them; or pass `layers=('l1.png', 'l2.png')` to use your own.
+    `detail=2` paints them at 128x64 (finer borders and bevels).
+    `extras` = {piece: {bone: [parts]}} adds 3D pieces worn on Bedrock (pauldrons, spikes, a
+    crest), with `mats` for their materials. Bones: head, body, right_arm, left_arm, right_leg,
+    left_leg. Build them around a player standing at the origin: feet at y = 0, facing -z, its
+    right side toward +x (shoulder joint at (5, 22, 0), hip at (1.9, 12, 0)). Java has no 3D
+    worn armor: it shows the layers (and a 3D helmet only as an Item of style 'helmet').
     Pieces are Items with wears=(this id, piece).
     """
 
-    def __init__(self, ident, ramp=None, accent=None, layers=None, open_face=True):
+    def __init__(self, ident, ramp=None, accent=None, layers=None, open_face=True, detail=1, extras=None,
+                 mats=None, density=DENSITY, seed=None):
         _check_id(ident, 'armor set')
         self.id = ident
+        self.extras = {}
+        for piece, bones in (extras or {}).items():
+            if piece not in ARMOR_PIECES:
+                raise ValueError('%s: extras piece %r not in %s' % (ident, piece, ', '.join(ARMOR_PIECES)))
+            bad = sorted(set(bones) - set(EXTRA_BONES))
+            if bad:
+                raise ValueError('%s: extras bones %s not in %s' % (ident, bad, ', '.join(EXTRA_BONES)))
+            placed = [(b, p) for b, parts in bones.items() for p in parts]
+            for _, p in placed:
+                p.within_45()
+            m = Model('%s_%s_3d' % (ident, piece), [p for _, p in placed], mats or {}, density=density)
+            self.extras[piece] = (m.finish(seed), [b for b, _ in placed])
         if layers:
             self.layer1, self.layer2 = read_png(layers[0]), read_png(layers[1])
             for lay in (self.layer1, self.layer2):
@@ -576,35 +667,80 @@ class ArmorSet:
             return
         if not ramp or len(ramp) < 7:
             raise ValueError('%s: give a ramp of 8 colors (paint.ramp) or layers=(png, png)' % ident)
-        pal = list(ramp)
-        l1 = [[CLEAR] * 64 for _ in range(32)]
-        for face, rect in _cube_faces(0, 0, 8, 8, 8).items():         # helmet
-            if face != 'bottom':
-                _paint_face(l1, face, rect, pal, accent=accent, open_front=open_face and face == 'front')
+        if detail not in (1, 2):
+            raise ValueError('%s: detail is 1 (64x32 layers) or 2 (128x64)' % ident)
+        pal, k = list(ramp), detail
+
+        def face(lay, rect, f, **kw):
+            _paint_face(lay, f, rect, pal, k=k, **kw)
+
+        def dot(lay, x, y, c):                                         # one 64x32 pixel at any detail
+            for dy in range(k):
+                for dx in range(k):
+                    lay[y * k + dy][x * k + dx] = c
+
+        l1 = [[CLEAR] * 64 * k for _ in range(32 * k)]
+        for f, rect in _cube_faces(0, 0, 8, 8, 8).items():             # helmet
+            if f != 'bottom':
+                face(l1, rect, f, accent=accent, open_front=open_face and f == 'front')
         fx, fy, fw, _ = _cube_faces(0, 0, 8, 8, 8)['front']            # brow: two rows on top
         for i in range(fw):
-            l1[fy + 1][fx + i] = pal[5]
+            dot(l1, fx + i, fy + 1, pal[5])
             if 0 < i < fw - 1:
-                l1[fy + 2][fx + i] = pal[3]
-        for face, rect in _cube_faces(16, 16, 8, 12, 4).items():      # chest
-            _paint_face(l1, face, rect, pal, accent=accent)
-        for face, rect in _cube_faces(40, 16, 4, 12, 4).items():      # arms (shoulders down)
-            if face != 'bottom':
-                _paint_face(l1, face, rect, pal, rows=None if face == 'top' else range(0, 9))
-        for face, rect in _cube_faces(0, 16, 4, 12, 4).items():       # boots
-            if face != 'top':
-                _paint_face(l1, face, rect, pal, rows=None if face == 'bottom' else range(8, 12))
-        l2 = [[CLEAR] * 64 for _ in range(32)]
-        for face, rect in _cube_faces(16, 16, 8, 12, 4).items():      # waist
-            if face not in ('top', 'bottom'):
-                _paint_face(l2, face, rect, pal, rows=range(7, 12))
-        for face, rect in _cube_faces(0, 16, 4, 12, 4).items():       # legs
-            if face != 'bottom':
-                _paint_face(l2, face, rect, pal, rows=None if face == 'top' else range(0, 10))
+                dot(l1, fx + i, fy + 2, pal[3])
+        for f, rect in _cube_faces(16, 16, 8, 12, 4).items():          # chest
+            face(l1, rect, f, accent=accent)
+        for f, rect in _cube_faces(40, 16, 4, 12, 4).items():          # arms (shoulders down)
+            if f != 'bottom':
+                face(l1, rect, f, rows=None if f == 'top' else range(0, 9))
+        for f, rect in _cube_faces(0, 16, 4, 12, 4).items():           # boots
+            if f != 'top':
+                face(l1, rect, f, rows=None if f == 'bottom' else range(8, 12))
+        l2 = [[CLEAR] * 64 * k for _ in range(32 * k)]
+        for f, rect in _cube_faces(16, 16, 8, 12, 4).items():          # waist
+            if f not in ('top', 'bottom'):
+                face(l2, rect, f, rows=range(7, 12))
+        for f, rect in _cube_faces(0, 16, 4, 12, 4).items():           # legs
+            if f != 'bottom':
+                face(l2, rect, f, rows=None if f == 'top' else range(0, 10))
         if accent:
             bx, by, _, _ = _cube_faces(16, 16, 8, 12, 4)['front']
-            l2[by + 8][bx + 4] = accent[-2]
+            dot(l2, bx + 4, by + 8, accent[-2])
         self.layer1, self.layer2 = l1, l2
+
+    # ------------------------------------------------------------ Bedrock: 3D pieces
+
+    def extras_geometry(self, piece, ident):
+        """geometry.<ident>: the piece's 3D extras on bones named like the player's, which follow it."""
+        m, bones = self.extras[piece]
+        out = []
+        for b in dict.fromkeys(bones):
+            name, pivot = EXTRA_BONES[b]
+            out.append({'name': name, 'pivot': pivot})
+            out.append({'name': name + '_3d', 'parent': name, 'pivot': pivot,
+                        'cubes': [_bedrock_cube(m, i, 0) for i, bb in enumerate(bones) if bb == b]})
+        return {'format_version': '1.16.0', 'minecraft:geometry': [{'description': {
+            'identifier': 'geometry.' + ident, 'texture_width': m.side, 'texture_height': m.side,
+            'visible_bounds_width': 3, 'visible_bounds_height': 3.5, 'visible_bounds_offset': [0, 1.25, 0]},
+            'bones': out}]}
+
+    @staticmethod
+    def extras_controller(ident):
+        """Draws the 3D pieces only while worn; in the hand the item model is enough."""
+        return {'controller.render.%s_3d' % ident: {
+            'geometry': 'Geometry.worn3d', 'materials': [{'*': 'Material.worn3d'}],
+            'textures': ['Texture.worn3d'], 'part_visibility': [{'*': 'v.worn'}]}}
+
+    def worn_model(self):
+        """A stand-in player wearing every 3D piece, for the preview."""
+        from .geom import box
+        from .paint import material, ramp
+        parts = [box(n, c, s, '_body') for n, c, s in MANNEQUIN]
+        mats = {'_body': material('flat', ramp('#5a5f6a', '#8a909c'))}
+        for m, _ in self.extras.values():
+            parts += copy.deepcopy(m.parts)
+            mats.update(m.mats)
+        return Model(self.id + '_worn', parts, mats).finish()
 
     def preview(self, k=4):
         bg = (60, 60, 70, 255)
@@ -690,15 +826,59 @@ def _value(keys, t):
     return keys[-1][1]
 
 
+def _span(parts):
+    vs = [v for p in parts for v in p.vertices()]
+    return max(max(v[i] for v in vs) - min(v[i] for v in vs) for i in range(3))
+
+
+HEAD_TAG = re.compile(r'^(h|hi|h\[[^\]]*\])_')
+OTHER_TAGS = ('p_', 'b_', 'ob_', 'tag_', 'l_', 'seg_', 'tl_', 'jig_', 'g_', 'ih_', 'ir_', 'il_', 'mount')
+
+
+def _split(bone, max_bone):
+    """
+    Move the cubes of a bone wider than `max_bone` into child bones that each fit, grouped along
+    its longest axis, with their pivot at the group center. They have no animation of their own,
+    so they follow the bone. Children keep a head tag (h_, hi_) and drop any other tag, so a
+    split does not add seats, hitboxes or leash points.
+    """
+    if not bone.parts or _span(bone.parts) <= max_bone:
+        return 0
+    vs = [v for p in bone.parts for v in p.vertices()]
+    axis = max(range(3), key=lambda i: max(v[i] for v in vs) - min(v[i] for v in vs))
+    order = sorted(bone.parts, key=lambda p: sum(v[axis] for v in p.vertices()) / 8.0)
+    groups = [[order[0]]]
+    for p in order[1:]:
+        if _span(groups[-1] + [p]) <= max_bone:
+            groups[-1].append(p)
+        else:
+            groups.append([p])
+    name = bone.name
+    if not HEAD_TAG.match(name):
+        tag = next((t for t in OTHER_TAGS if name.startswith(t)), '')
+        name = name[len(tag):].lstrip('_') or 'part'
+    kids = []
+    for k, g in enumerate(groups):
+        gv = [v for p in g for v in p.vertices()]
+        pivot = [round((min(v[i] for v in gv) + max(v[i] for v in gv)) / 2.0, 4) for i in range(3)]
+        kids.append(Bone('%s_p%d' % (name, k + 1), pivot, g))
+    bone.parts = []
+    bone.children = kids + bone.children
+    return len(kids)
+
+
 class Creature:
     """
     An animated entity model. `bones`: top-level Bones. `hitbox` = (width, height) in blocks
     (the size of the base mob). `anims` = {name: Anim}. Faces -z, feet at y = 0.
     `scale` resizes everything (cubes, pivots, animation offsets, hitbox) and keeps the
     texture detail: design a boss at mob size, then scale=3.
+    `max_bone`: loaders turn each bone into one item model, so a bone wider than this (units)
+    is split into child bones `<bone>_p1`, `_p2`... that follow it.
     """
 
-    def __init__(self, ident, bones, mats, hitbox, anims, density=2.0, max_side=256, seed=None, scale=1.0):
+    def __init__(self, ident, bones, mats, hitbox, anims, density=2.0, max_side=256, seed=None, scale=1.0,
+                 max_bone=48):
         _check_id(ident, 'creature')
         if '/' in ident:
             raise ValueError('%s: creature ids cannot have folders (loaders use the file name)' % ident)
@@ -709,19 +889,16 @@ class Creature:
         self.anims = anims
         self.all_bones = [b for r in self.bones for b in r.walk()]
         names = [b.name for b in self.all_bones]
-        dup = sorted({n for n in names if names.count(n) > 1})
-        if dup:
-            raise ValueError('%s: repeated bone names %s' % (ident, dup))
         if 'hitbox' in names:
             raise ValueError('%s: do not add a hitbox bone; it is generated from `hitbox`' % ident)
         for a, anim in anims.items():
             for b in anim.tracks:
                 if b not in names:
                     raise ValueError('%s/%s: no bone named %s' % (ident, a, b))
-        self.cubes = [(p, b) for b in self.all_bones for p in b.parts]
+        self.warnings_extra = []
+        self.max_bone = max_bone
         if scale != 1.0:
-            for p, _ in self.cubes:
-                p.frm, p.to, p.origin = [v * scale for v in p.frm], [v * scale for v in p.to], [v * scale for v in p.origin]
+            scale_parts([p for b in self.all_bones for p in b.parts], scale, [0, 0, 0])
             for b in self.all_bones:
                 b.pivot = [v * scale for v in b.pivot]
             for a in anims.values():
@@ -730,6 +907,17 @@ class Creature:
                         ch['pos'] = [(t, tuple(round(v * scale, 3) for v in val)) for t, val in ch['pos']]
             self.hitbox = (hitbox[0] * scale, hitbox[1] * scale)
             density /= scale
+        for b in list(self.all_bones):
+            n = _split(b, max_bone)
+            if n:
+                self.warnings_extra.append('NOTE bone %s spans %.0f units: split into %d child bones'
+                                           % (b.name, _span([p for c in b.children[:n] for p in c.parts]), n))
+        self.all_bones = [b for r in self.bones for b in r.walk()]
+        names = [b.name for b in self.all_bones]
+        dup = sorted({n for n in names if names.count(n) > 1})
+        if dup:
+            raise ValueError('%s: repeated bone names %s' % (ident, dup))
+        self.cubes = [(p, b) for b in self.all_bones for p in b.parts]
         for p, _ in self.cubes:
             p.within_45()     # a single-axis turn past 90 would read as three axes in Blockbench
         multi = ['%s (%s): %s' % (p.name, b.name, [a for a in p.angles() if a]) for p, b in self.cubes
@@ -743,7 +931,7 @@ class Creature:
 
     @property
     def warnings(self):
-        return self.model.warnings
+        return self.warnings_extra + self.model.warnings
 
     def bbmodel(self):
         """Blockbench 'Generic Model' (free format) with bones, the hitbox bone and animations."""

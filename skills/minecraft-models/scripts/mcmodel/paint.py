@@ -240,6 +240,24 @@ def metal(mat, f, w, h, rnd, p, phase, i):
     return px
 
 
+def plate(mat, f, w, h, rnd, p, phase, i):
+    """Armor plating: panels split by dark seams every `panel` px (default 12), a rivet in each corner
+    of panels on faces at least 8 px across."""
+    r = mat['ramp']
+    n = max(6, int(mat.get('panel', 12)))
+    b = mat.get('tone', 0.5) * len(r) + _face_tone(f)
+    px = [[_at(r, b + rnd.uniform(-0.25, 0.25)) for _ in range(w)] for _ in range(h)]
+    studs = min(w, h) >= 8
+    for y in range(h):
+        for x in range(w):
+            if (0 < x < w - 1 and x % n == n - 1) or (0 < y < h - 1 and y % n == n - 1):
+                px[y][x] = r[1]
+            elif studs and x % n in (2, n - 3) and y % n in (2, n - 3) and x < w - 2 and y < h - 2:
+                px[y][x] = r[-2]
+    _bevel(px, w, h, r[-1], r[1])
+    return px
+
+
 def crystal(mat, f, w, h, rnd, p, phase, i):
     """Diagonal facets that slide, with sparkles that move (animated)."""
     r = mat['ramp']
@@ -446,7 +464,7 @@ def flat(mat, f, w, h, rnd, p, phase, i):
     return [[_at(r, mat.get('tone', len(r) // 2) + rnd.uniform(-0.4, 0.4)) for x in range(w)] for y in range(h)]
 
 
-PAINTERS = {'metal': metal, 'crystal': crystal, 'energy': energy, 'rune': rune, 'grip': grip, 'trim': trim,
+PAINTERS = {'metal': metal, 'plate': plate, 'crystal': crystal, 'energy': energy, 'rune': rune, 'grip': grip, 'trim': trim,
             'gem': gem, 'orb': orb, 'wood': wood, 'bone': bone, 'scales': scales, 'skin': skin, 'fur': fur,
             'cracked': cracked, 'cloth': cloth, 'eye': eye, 'flat': flat}
 ANIMATED = {'crystal', 'energy', 'rune', 'orb'}

@@ -10,7 +10,7 @@ import os
 import zipfile
 import zlib
 
-from .model import ARMOR_PIECES, Item
+from .model import ARMOR_PIECES, DISPLAYED, ArmorSet, Item
 from .paint import png_bytes, scale_img
 from .render import render
 
@@ -104,6 +104,7 @@ def bedrock_pack(p, path):
         return 0
     z = FixedZip(path)
     icons, ctrls = {}, {}
+    armors = {a.id: a for a in p.armors}
     for it in p.items:
         ck = '%s_%s' % (ns, flat_id(it.id))
         bid = '%s:%s' % (ns, flat_id(it.id))
@@ -113,12 +114,18 @@ def bedrock_pack(p, path):
         z.add(tex + '.png', png_bytes(it.px))
         z.add('models/entity/%s.geo.json' % ck, it.bedrock_geometry(ck))
         z.add('animations/%s.animation.json' % ck, it.bedrock_animations(ck))
-        worn = None
+        worn = worn3d = None
         if it.wears:
             slot, layer = ARMOR_PIECES[it.wears[1]]
             worn = (it.wears[1], slot, 'textures/%s/armor_%s_%d' % (ns, flat_id(it.wears[0]), layer))
             ctrls.update(Item.worn_controller(ck))
-        z.add('attachables/%s.json' % ck, it.bedrock_attachable(bid, ck, tex, worn))
+            armor = armors.get(it.wears[0])
+            if armor and it.wears[1] in armor.extras:
+                worn3d = tex + '_3d'
+                z.add(worn3d + '.png', png_bytes(armor.extras[it.wears[1]][0].px))
+                z.add('models/entity/%s_3d.geo.json' % ck, armor.extras_geometry(it.wears[1], ck + '_3d'))
+                ctrls.update(ArmorSet.extras_controller(ck))
+        z.add('attachables/%s.json' % ck, it.bedrock_attachable(bid, ck, tex, worn, worn3d))
     for a in p.armors:
         for n, lay in ((1, a.layer1), (2, a.layer2)):
             z.add('textures/%s/armor_%s_%d.png' % (ns, flat_id(a.id), n), png_bytes(lay))
@@ -208,19 +215,28 @@ def t_rpgroll(p, out):
                      'and run `/srp rebuild` (then `/srp publish` if you upload the pack).' % p.ns)
         notes.append('Bedrock: `Geyser-Spigot/` goes into `plugins/Geyser-Spigot/` (or `Geyser-Velocity/` on '
                      'the proxy). Restart Geyser. Pack: %d KB.' % (size // 1024))
-    for it in p.items:
-        if it.style == 'furniture':
-            continue
+    held = [it for it in p.items if it.style not in DISPLAYED]
+    for it in held:
         lines = ['id: %s' % flat_id(it.id), 'pack: %s' % p.ns, 'material: %s' % it.base.upper(),
                  'item-model: "%s:%s"' % (p.ns, it.id), 'display-name: %s' % yaml_str('&f' + it.name)]
         if it.wears:
             lines.append('equipment-model: "%s:%s"' % (p.ns, it.wears[0]))
         elif it.style == 'helmet':
             lines.append('equipment-model: none     # the 3D model itself is worn on the head')
+        if it.shot:
+            lines += ['triggers:', '  RIGHT_CLICK:', '    - type: SHOOT']
+            lines += ['      %s: %s' % (k, yaml_str(_shot_value(p, k, v))) for k, v in it.shot.items()]
         write(os.path.join(out, 'RPGRoll-Items', 'packs', p.ns, flat_id(it.id) + '.yml'), '\n'.join(lines) + '\n')
-    if any(it.style != 'furniture' for it in p.items):
+    if held:
         notes.append('RPGRoll-Items: `RPGRoll-Items/packs/%s/*.yml` are minimal item files (material, '
-                     'item-model, equipment-model); add stats and triggers, then `/item reload`.' % p.ns)
+                     'item-model, equipment-model, SHOOT for guns); add stats and triggers, then `/item reload`.'
+                     % p.ns)
+    if any(it.shot for it in p.items):
+        notes.append('SHOOT `ammo` and `sustain` need RPGRoll-Items 1.1.8+. A sustained beam (`sustain`) stays '
+                     'on while right click is held: Java repeats the click every 4 ticks, so `amount` and the '
+                     'ammo are per pulse (5 per second).')
+    if any(it.style == 'projectile' for it in p.items):
+        notes.append('Projectiles have no item file: SHOOT shows them through `model` (with `speed` > 0).')
     furn = [it for it in p.items if it.style == 'furniture']
     if furn:
         write(os.path.join(out, 'RPGRoll-Furniture', p.ns + '.example.yml'), ''.join(
@@ -243,6 +259,16 @@ def t_rpgroll(p, out):
 
 def _plugin_assets(p, root):
     java_assets(p, os.path.join(root, 'assets'))
+
+
+def _shot_value(p, key, value):
+    """SHOOT `model` and `ammo` may name items of the spec: give them as RPGRoll sees them."""
+    ids = {it.id for it in p.items}
+    if key == 'model' and value in ids:
+        return '%s:%s' % (p.ns, value)
+    if key == 'ammo' and value in ids:
+        return flat_id(value)
+    return str(value).lower() if isinstance(value, bool) else str(value)
 
 
 def t_itemsadder(p, out):

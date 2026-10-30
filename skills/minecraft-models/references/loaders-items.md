@@ -31,6 +31,48 @@ rpgroll/RPGRoll-Mobs/<ns>.example.yml                               the model bl
 - RPGRoll-Mobs: `model.model-engine-id: <creature id>` (a FreeMinecraftModels model). FMM plays
   spawn/idle/walk/death, RPGRoll-Mobs plays `attack` on hit and custom ones via `ANIMATION`.
 
+### SHOOT, ammunition and sustained lasers
+
+`Item(shot={...})` writes a `SHOOT` action under `triggers: RIGHT_CLICK` in the `rpgroll` target.
+Other loaders export the visual assets but ignore `shot`. `examples/lasers.py` has a pistol,
+beam rifle, plasma cannon, ammo cell and projectile. A beam rifle spec can use:
+
+```python
+shot={'amount': 2, 'range': 24, 'sustain': 6, 'particle': 'DUST', 'color': '#30C8FF',
+      'ammo': 'ammo/laser_cell', 'sound': 'BLOCK_BEACON_AMBIENT', 'pitch': 2.0}
+```
+
+If that cell is an Item in the same spec, generated YAML uses `ammo: ammo_laser_cell`. A local
+projectile `model: projectiles/plasma_bolt` becomes `<ns>:projectiles/plasma_bolt`; it has pack
+assets but no RPGRoll-Items file. External ammo ids/model keys pass through unchanged.
+
+| Parameter | Meaning |
+|---|---|
+| `amount`, `range` | damage per shot/pulse, maximum distance in blocks |
+| `speed` | 0 (default): hitscan; positive: flying projectile speed in blocks/tick |
+| `model` | ItemDisplay item model key for a projectile; needs `speed > 0` |
+| `ammo` | RPGRoll item id, or `minecraft:<material>` for vanilla ammo; omitted = unlimited |
+| `ammo-amount` | ammo spent per shot/pulse (default 1, minimum 1) |
+| `no-ammo-sound`, `no-ammo-message` | failure sound (default `BLOCK_DISPENSER_FAIL`) and optional action-bar message |
+| `sound`, `volume`, `pitch` | shot sound and its volume/pitch (both default 1) |
+| `sustain` | visual beam lifetime in ticks, renewed by each hitscan pulse; 0 = single shot |
+
+Ammo is checked before firing; insufficient ammo cancels the shot without partial consumption.
+Creative players need to carry enough ammo but do not spend it. Vanilla ammo does not match
+custom RPGRoll items made from that same material.
+
+Ammo and `sustain` require the RPGRoll-Items changes intended for **1.1.8**, currently local and
+unpublished. Do not assume the installed release supports them. With `speed=0` and `sustain=6`,
+the beam follows aim every tick; holding right click on Java repeats a pulse every 4 ticks
+(5/second at 20 TPS), refreshing the visual. Damage, ammo and sound apply per pulse, not per
+visual tick. For sustained hits, target invulnerability is reset each pulse. After release, the
+visual expires when its remaining ticks run out. `speed > 0` takes the projectile path and
+ignores `sustain`.
+
+In-game checks remain: held-click repetition through Geyser, knockback under repeated pulses,
+ammo depletion and beam timing, and projectile pitch with GeyserDisplayEntity. The skill build
+validates exported assets/configuration; it does not exercise server combat behavior.
+
 ## ItemsAdder (`itemsadder` target) — check
 
 ```

@@ -47,7 +47,9 @@ Settle these before writing anything; ask only what you cannot infer:
 ## 2. Write the spec
 
 Copy the closest example and edit it: `examples/arsenal.py` (sword, pickaxe, pistol, crown,
-lantern, chair, armor set) or `examples/bestiary.py` (a mob and a boss with animations). Read
+lantern, chair, armor set), `examples/bestiary.py` (a mob and a boss with animations),
+`examples/titans.py` (huge weapons, bulky armor, giant boss) or `examples/lasers.py` (ammo cells,
+laser pistol, sustained beam rifle, plasma cannon/projectile). Read
 `references/spec-api.md` for the full API and `references/design.md` for proportions, palettes and
 animation timing. Put the spec in the user's project (e.g. `models/<pack>.py`), not in this skill.
 
@@ -56,14 +58,22 @@ The rules that matter most, and why:
 - **Build items upright in the 0..16 box, around (8, 8, 8).** Display transforms (hand, inventory,
   head, ground) are computed from the style, so the same cubes look right everywhere. A `handheld`
   item is built tip-up and tilted for you like a vanilla sword.
-- **Every coordinate must stay within -16..32** (Java's limit). The build refuses parts outside it;
-  make the model smaller instead (the display scale enlarges it back).
+- **Large `handheld` and `gun` weapons fit into Java's -16..32 box automatically.** Build at design
+  size and set `hand_scale` for a larger held weapon. Other item styles must stay within that box.
+  Use the default unrotated `tube()` for handles; `round=True` can combine with the handheld tilt
+  into rotations that need Java 1.21.11+.
 - **Prefer single-axis rotations in 22.5 degree steps.** They work on every 1.21.4+ client. Free
   angles need 1.21.6+, multi-axis rotations 1.21.11+. The build prints the oldest version each item
   needs; tell the user when it is above what they run.
 - **Creatures face -z, feet at y = 0, one rotation axis per cube.** Entity loaders reject
   multi-axis cubes; use `cube()`/`limb()` and child bones. Name head bones `h_...`. Do not add a
   `hitbox` bone yourself: pass `hitbox=(width, height)` in blocks.
+- **Giant creatures split wide bones automatically** (`max_bone=48`), keeping the original animation
+  parents. Each individual cube must still fit after `scale`. `ArmorSet(detail=2, extras=..., mats=...)`
+  adds finer layers and Bedrock worn 3D pieces; Java shows layers plus a separate 3D helmet if supplied.
+- **`shot` exports RPGRoll SHOOT actions only.** Ammo and sustained beams need the local changes
+  intended for RPGRoll-Items 1.1.8 (not yet published). Damage/ammo apply per pulse; read
+  `references/loaders-items.md`. A `projectile` Item supplies the model; Bedrock needs GeyserDisplayEntity.
 - **Use 3 to 6 materials with real ramps.** Ramps go dark to light; painters use the ends for
   bevels and highlights. Glow (`glow=`) only on what should emit light.
 - **Ids are lowercase** (`a-z 0-9 _ - .`, folders with `/`). Never use the `minecraft` namespace.
@@ -80,6 +90,8 @@ Then open the previews with your image-reading tool, every time, before answerin
   at 64 px, centered, not cut?
 - `preview/items_3d.png`: three-quarter views. Proportions, gaps between parts, floating cubes.
 - `preview/armor_<set>.png`: the two worn layers.
+- `preview/armor_<set>_3d.png`: optional Bedrock extras on a stand-in player, front/side/back;
+  it excludes the layer textures and separate helmet. Check actual bone binding in game.
 - `preview/creature_<id>.png`: rest pose, then each animation at 30%, front 3/4 and side. Limbs
   should swing from joints, nothing should detach; the side view shows the front on the left.
 

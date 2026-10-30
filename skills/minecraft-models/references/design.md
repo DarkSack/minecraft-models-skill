@@ -21,8 +21,35 @@
   `limb()` already overlap.
 - **Cube budget:** 6-20 cubes for an item, 20-60 for a mob, up to ~150 for a boss. More cubes cost
   texture space and client performance.
-- **Weapons longer than a sword** are fine: they are scaled down in the hand automatically. Keep
-  them within -16..32 by building smaller and letting the display scale them.
+- **Weapons longer than a sword** can be built at full design size with `handheld` or `gun`:
+  the build fits the geometry into -16..32. Set `hand_scale` to make the held weapon larger
+  than its normal sword/gun fit. Other styles still require coordinates inside the Java box.
+
+## Large weapons and bulky armor
+
+Start from `examples/titans.py` for a greatsword, warhammer or heavy armor, and `examples/lasers.py`
+for a pistol, sustained beam rifle or plasma cannon. Keep a strong grip, a thick spine and one
+main glow line. `blade()` adds a tapered edge; `bevel()` gives metal heads and plates volume;
+`plate` paints panel seams without spending extra cubes. Use `rivets()` sparingly: small studs
+become noise in inventory icons and consume atlas space. Set `density=3` for detailed large
+items if needed, then inspect any density warning and the 256 px atlas result.
+
+Use the default unrotated `tube()` for handles on handheld weapons. A tube with `round=True`
+adds a 45-degree turn that can combine with the weapon tilt into a Java 1.21.11 rotation.
+Check the reported minimum version per item after building.
+
+For armor, `detail=2` improves the worn layer borders. Add Bedrock pauldrons, knee guards and toe
+caps through `ArmorSet.extras` in player coordinates. Inspect `armor_<set>_3d.png` for floating
+parts and clipping; its grey player shows extras only. Java uses the layers, with a separate
+`helmet` item if a 3D head silhouette is needed. Confirm movement on a real Bedrock player.
+
+## Giant bosses
+
+Design at mob size, then use `Creature(scale=3)` as in the colossus. Keep every cube small enough
+that its rotated span after scaling is at most `max_bone` (48 by default). Wide groups split
+automatically into child bones that follow the animated parent; individual cubes do not split.
+Keep animation tracks on the original joint names. Recheck the scaled hitbox, shoulder/hip
+pivots and front/side attack poses. Increase wind-up and recovery times for the boss's weight.
 
 ## Color
 
