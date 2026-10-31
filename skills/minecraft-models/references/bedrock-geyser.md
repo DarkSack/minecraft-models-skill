@@ -69,6 +69,11 @@ Java cube `from`/`to` around (8, 8, 8) -> Bedrock cube `origin = [-(to.x - 8), f
 `size` unchanged; the Java rotation origin `o` -> Bedrock `pivot = [-(o.x - 8), o.y, o.z - 8]`;
 rotation `(x, y, z)` -> `[-x, -y, z]`. UVs are copied per face in pixels.
 
+Hand animation translations use `[-x, y, z]` on the right and `[x, y, z]` on the left in
+third person. First person inverts depth too: `[-x, y, -z]` and `[x, y, -z]`, respectively,
+matching [java2bedrock's conversion](https://github.com/Kas-tle/java2bedrock.sh/blob/main/converter.sh).
+Do not apply the first-person depth sign to head or third-person transforms.
+
 ## Worn armor
 
 The attachable of each armor piece carries two geometries: the 3D item model (`default`) and
@@ -80,8 +85,8 @@ With `ArmorSet(detail=2)`, worn layers are 128x64. `extras` adds a third geometr
 (`worn3d`) and a second render controller (`controller.render.<id>_3d`) visible only when `v.worn`.
 Extras attach to player bones `head`, `body`, `rightArm`, `leftArm`, `rightLeg`, `leftLeg` via
 child bones ending `_3d`. The layer controller keeps drawing underneath; the inventory/held item
-uses its ordinary model. These extras are generated and previewed but **not yet verified in a
-Bedrock client**, especially arm/body binding during movement. Java equipment supports the
+uses its ordinary model. Titan extras have been checked on a stationary Bedrock player; prolonged
+movement and arm/body binding while attacking still need client checks. Java equipment supports the
 layers only; use a separate `helmet`-style item for a 3D helmet on both editions.
 
 ## Furniture (ItemDisplay)
@@ -97,6 +102,12 @@ GeyserDisplayEntity. Build the nose along +z; RPGRoll rotates the ItemDisplay in
 direction. Projectile pitch (especially upward/downward shots) still needs an in-game Geyser check.
 Large weapons export `hand_scale` in hand animations, with larger visible bounds; verify the
 grip and first/third-person size on the client.
+
+Client QA on Bedrock 1.26.60/Geyser 2.12.1 found that a rifle visible in first person at player
+scale 1 becomes hidden at scale 0.7 (RPGRoll's dwarf). Removing armor does not resolve it, and
+the ordinary stone item remains visible. The first-person depth conversion above is correct but
+does not fix this scale-dependent issue. Do not certify scaled player races from a scale-1 check
+or bake a fixed vertical offset into every weapon. Check both scales in game.
 
 ## Traps
 

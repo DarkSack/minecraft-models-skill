@@ -487,11 +487,12 @@ class Item(Model):
         """Java's `display` turned into Bedrock animations (same split as java2bedrock)."""
         d = self.display or {}
 
-        def bones(pos, root, mirror_x=True, k=1.0):
+        def bones(pos, root, mirror_x=True, k=1.0, mirror_z=False):
             r, t, s = pos.get('rotation', [0, 0, 0]), pos.get('translation', [0, 0, 0]), pos.get('scale', [1, 1, 1])
             return {'geyser_custom': root,
                     'geyser_custom_x': {'rotation': [-r[0], 0, 0],
-                                        'position': [(-t[0] if mirror_x else t[0]) * k, t[1] * k, t[2] * k],
+                                        'position': [(-t[0] if mirror_x else t[0]) * k, t[1] * k,
+                                                     (-t[2] if mirror_z else t[2]) * k],
                                         'scale': [v * k for v in s]},
                     'geyser_custom_y': {'rotation': [0, -r[1], 0]},
                     'geyser_custom_z': {'rotation': [0, 0, r[2]]}}
@@ -501,8 +502,8 @@ class Item(Model):
         fp = {'rotation': [90, 60, -40], 'position': [4, 10, 4], 'scale': 1.5}
         anims = {base + '.tp_right': bones(d['thirdperson_righthand'], tp),
                  base + '.tp_left': bones(d['thirdperson_lefthand'], tp, mirror_x=False),
-                 base + '.fp_right': bones(d['firstperson_righthand'], fp),
-                 base + '.fp_left': bones(d['firstperson_lefthand'], fp, mirror_x=False),
+                 base + '.fp_right': bones(d['firstperson_righthand'], fp, mirror_z=True),
+                 base + '.fp_left': bones(d['firstperson_lefthand'], fp, mirror_x=False, mirror_z=True),
                  base + '.head': bones(d.get('head', {}), {'position': [0, 19.9, 0]}, k=0.625)}
         if self.style in DISPLAYED:
             # GeyserDisplayEntity sends the offset x10 (a block is 16) with z flipped, and bound

@@ -33,6 +33,14 @@ def test_bedrock_conversion():
     assert a['origin'] == [-2, 0, -2] and a['size'] == [4, 4, 4], a
     assert a['pivot'] == [0, 2, 0] and a['rotation'] == [0.0, 0.0, 22.5], a
     assert b['origin'] == [2, 5, 0] and b['rotation'] == [-22.5, 0.0, 0.0], b
+    # java2bedrock's hand convention flips depth only in first person, on both hands.
+    for view in ('firstperson_righthand', 'firstperson_lefthand',
+                 'thirdperson_righthand', 'thirdperson_lefthand'):
+        it.display[view]['translation'] = [2, 3, 5]
+    anim = it.bedrock_animations('test')['animations']
+    for view, expected in (('fp_right', [-2, 3, -5]), ('fp_left', [2, 3, -5]),
+                           ('tp_right', [-2, 3, 5]), ('tp_left', [2, 3, 5])):
+        assert anim['animation.test.' + view]['bones']['geyser_custom_x']['position'] == expected
 
 
 def test_png_roundtrip():
